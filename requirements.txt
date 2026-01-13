@@ -1,0 +1,5 @@
+requests==2.32.3
+tqdm==4.66.5
+
+# Optional (only if you set GCS_BUCKET and want to write to Google Cloud Storage)
+# google-cloud-storage==2.18.2
