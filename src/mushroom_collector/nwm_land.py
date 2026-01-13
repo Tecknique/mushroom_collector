@@ -24,11 +24,9 @@ from rasterio.transform import from_origin
 import adlfs
 
 from .logging_utils import get_logger
-from .collector import env_flag
 
 logger = get_logger("nwm")
 
-# Soil layer weights (0–2 m): 0–10, 10–40, 40–100, 100–200 cm
 W_SOIL = xr.DataArray(np.array([0.10, 0.30, 0.60, 1.00]) / 2.0, dims=["soil_layers_stag"])
 
 
@@ -91,13 +89,7 @@ def t0(da: xr.DataArray) -> xr.DataArray:
 
 
 class NWMLandFeaturizer:
-    """
-    Reads NOAA NWM 'analysis_assim land' netCDFs from Azure public blob (account: noaanwm).
-
-    Two workflows:
-    - bbox: build daily geoparquet grids for a year (sharded by day)
-    - enrich: enrich iNat taxon CSVs with sampled nearest-grid features (sharded by row index)
-    """
+    """Reads NOAA NWM 'analysis_assim land' netCDFs from Azure public blob (account: noaanwm)."""
 
     def __init__(self, *, workers: int = 4, cache_dir: Optional[pathlib.Path] = None) -> None:
         self.fs = adlfs.AzureBlobFileSystem(account_name="noaanwm")

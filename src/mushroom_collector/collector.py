@@ -37,8 +37,8 @@ class OutputTarget:
 
 
 class MushroomDataCollector:
-    """
-    Collect iNaturalist observations into per-taxon CSVs + a combined CSV.
+    """Collect iNaturalist observations into per-taxon CSVs + a combined CSV.
+
     Supports local filesystem or GCS (optional dependency).
     """
 

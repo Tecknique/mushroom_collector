@@ -66,6 +66,38 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--shard-id", type=int, default=0)
     pe.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=None)
 
+    # -------- terrain --------
+    pter = sub.add_parser("terrain", help="Terrain features from AWS elevation tiles")
+    tsub = pter.add_subparsers(dest="mode", required=True)
+
+    twa = tsub.add_parser("preview-wa", help="Sample a few grid points over WA bbox (print-only)")
+    twa.add_argument("--n-points", type=int, default=10)
+    twa.add_argument("--step-m", type=float, default=20_000.0)
+    twa.add_argument("--zoom", type=int, default=int(os.getenv("TERRAIN_ZOOM", "14")))
+    twa.add_argument("--workers", type=int, default=int(os.getenv("TERRAIN_WORKERS", "8")))
+    twa.add_argument("--tile-cache", default=None, help="Tile cache directory")
+
+    tcs = tsub.add_parser("preview-csv", help="Sample first taxon CSV rows and annotate (print-only)")
+    tcs.add_argument("--mushroom-dir", default=None)
+    tcs.add_argument("--n-rows", type=int, default=10)
+    tcs.add_argument("--zoom", type=int, default=int(os.getenv("TERRAIN_ZOOM", "14")))
+    tcs.add_argument("--workers", type=int, default=int(os.getenv("TERRAIN_WORKERS", "8")))
+    tcs.add_argument("--tile-cache", default=None, help="Tile cache directory")
+
+    tb = tsub.add_parser("build-wa-250m", help="Build WA 250m terrain parquet (sharded)")
+    tb.add_argument("--out-dir", default=None, help="Output directory")
+    tb.add_argument("--step-m", type=float, default=250.0)
+    tb.add_argument("--parquet-name", default="wa_terrain_250m_v2.parquet")
+    tb.add_argument("--zoom", type=int, default=int(os.getenv("TERRAIN_ZOOM", "14")))
+    tb.add_argument("--workers", type=int, default=int(os.getenv("TERRAIN_WORKERS", "8")))
+    tb.add_argument("--tile-cache", default=None, help="Tile cache directory")
+
+    te = tsub.add_parser("enrich-csv", help="Enrich mushroom data.csv files in place (sharded)")
+    te.add_argument("--mushroom-dir", default=None)
+    te.add_argument("--zoom", type=int, default=int(os.getenv("TERRAIN_ZOOM", "14")))
+    te.add_argument("--workers", type=int, default=int(os.getenv("TERRAIN_WORKERS", "8")))
+    te.add_argument("--tile-cache", default=None, help="Tile cache directory")
+
     return p
 
 
@@ -118,7 +150,7 @@ def run_nwm_bbox(args: argparse.Namespace) -> int:
     bbox = tuple(args.bbox)
     nwm.run_bbox_year(
         year=args.year,
-        bbox_wgs84=bbox,  # (minlon, minlat, maxlon, maxlat)
+        bbox_wgs84=bbox,
         out_root=out_root,
         n_shards=int(os.getenv("N_SHARDS", args.n_shards)),
         shard_id=int(os.getenv("SHARD_ID", args.shard_id)),
@@ -145,6 +177,48 @@ def run_nwm_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def _terrain_cache_dir(arg: str | None) -> Path:
+    return Path(arg or os.getenv("TERRAIN_TILE_CACHE") or ".terrain_tile_cache").expanduser()
+
+
+def run_terrain_preview_wa(args: argparse.Namespace) -> int:
+    from .terrain_wa import ShardSpec, WashingtonTerrain
+
+    shard = ShardSpec.from_env()
+    pipeline = WashingtonTerrain(workers=args.workers, zoom=args.zoom, cache_dir=_terrain_cache_dir(args.tile_cache))
+    pipeline.preview_wa(n_points=args.n_points, step_m=args.step_m)
+    return 0
+
+
+def run_terrain_preview_csv(args: argparse.Namespace) -> int:
+    from .terrain_wa import WashingtonTerrain
+
+    mushroom_dir = Path(args.mushroom_dir or os.getenv("MUSHROOM_DIR") or (Path.cwd() / "mushroom_data")).expanduser()
+    pipeline = WashingtonTerrain(workers=args.workers, zoom=args.zoom, cache_dir=_terrain_cache_dir(args.tile_cache))
+    pipeline.preview_csv(mushroom_dir=mushroom_dir, n_rows=args.n_rows)
+    return 0
+
+
+def run_terrain_build_wa_250m(args: argparse.Namespace) -> int:
+    from .terrain_wa import ShardSpec, WashingtonTerrain
+
+    shard = ShardSpec.from_env()
+    out_dir = Path(args.out_dir or os.getenv("TERRAIN_OUT_DIR") or (Path.cwd() / "terrain_data")).expanduser()
+    pipeline = WashingtonTerrain(workers=args.workers, zoom=args.zoom, cache_dir=_terrain_cache_dir(args.tile_cache))
+    pipeline.build_wa_parquet_250m(out_dir=out_dir, step_m=args.step_m, parquet_name=args.parquet_name, shard=shard)
+    return 0
+
+
+def run_terrain_enrich_csv(args: argparse.Namespace) -> int:
+    from .terrain_wa import ShardSpec, WashingtonTerrain
+
+    shard = ShardSpec.from_env()
+    mushroom_dir = Path(args.mushroom_dir or os.getenv("MUSHROOM_DIR") or (Path.cwd() / "mushroom_data")).expanduser()
+    pipeline = WashingtonTerrain(workers=args.workers, zoom=args.zoom, cache_dir=_terrain_cache_dir(args.tile_cache))
+    pipeline.enrich_mushroom_csvs(mushroom_dir=mushroom_dir, shard=shard)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = build_parser()
     args = p.parse_args(argv)
@@ -157,5 +231,15 @@ def main(argv: list[str] | None = None) -> int:
             return run_nwm_bbox(args)
         if args.mode == "enrich":
             return run_nwm_enrich(args)
+
+    if args.tool == "terrain":
+        if args.mode == "preview-wa":
+            return run_terrain_preview_wa(args)
+        if args.mode == "preview-csv":
+            return run_terrain_preview_csv(args)
+        if args.mode == "build-wa-250m":
+            return run_terrain_build_wa_250m(args)
+        if args.mode == "enrich-csv":
+            return run_terrain_enrich_csv(args)
 
     raise SystemExit("Invalid arguments")

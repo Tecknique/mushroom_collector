@@ -1,0 +1,11 @@
+-r base.txt
+numpy==1.26.4
+pandas==2.2.2
+pyarrow==14.0.2
+scipy==1.13.1
+rasterio==1.3.10
+pyproj==3.6.1
+shapely==2.0.4
+geopandas==0.14.4
+pyogrio==0.7.2
+fiona==1.9.6
