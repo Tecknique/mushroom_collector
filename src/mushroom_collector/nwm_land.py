@@ -89,7 +89,13 @@ def t0(da: xr.DataArray) -> xr.DataArray:
 
 
 class NWMLandFeaturizer:
-    """Reads NOAA NWM 'analysis_assim land' netCDFs from Azure public blob (account: noaanwm)."""
+    """
+    Reads NOAA NWM 'analysis_assim land' netCDFs from Azure public blob (account: noaanwm).
+
+    Two workflows:
+    - bbox: build daily geoparquet grids for a year (sharded by day)
+    - enrich: enrich iNat taxon CSVs with sampled nearest-grid features (sharded by row index)
+    """
 
     def __init__(self, *, workers: int = 4, cache_dir: Optional[pathlib.Path] = None) -> None:
         self.fs = adlfs.AzureBlobFileSystem(account_name="noaanwm")
