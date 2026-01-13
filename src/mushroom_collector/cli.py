@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
-from .collector import MushroomDataCollector, _env_flag
-from .config import CollectorConfig
+from .collector import MushroomDataCollector, env_flag
 from .logging_utils import get_logger
 
 logger = get_logger("mushrooms")
@@ -21,90 +20,142 @@ DEFAULT_TAXA: Dict[int, str] = {
     49158: "lionsMane",
 }
 
+DEFAULT_WA_BBOX_WGS84: Tuple[float, float, float, float] = (-124.9, 45.5, -117.0, 49.05)
 
-def build_config_from_env_and_args(args: argparse.Namespace) -> CollectorConfig:
-    progress_bar = _env_flag("PROGRESS_BAR", True) if args.progress_bar is None else args.progress_bar
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Mushroom pipeline tools")
+    sub = p.add_subparsers(dest="tool", required=True)
+
+    # -------- inat --------
+    pin = sub.add_parser("inat", help="Collect iNaturalist observations CSVs")
+    pin.add_argument("--output-dir", default=None, help="Local output directory (preferred).")
+    pin.add_argument("--gcs-bucket", default=None, help="GCS bucket name (optional).")
+    pin.add_argument("--inat-url", default=None)
+    pin.add_argument("--inat-token", default=None)
+    pin.add_argument("--start-date", default=None, help="YYYY-MM-DD")
+    pin.add_argument("--end-date", default=None, help="YYYY-MM-DD")
+    pin.add_argument("--per-page", type=int, default=200)
+    pin.add_argument("--max-retries", type=int, default=5)
+    pin.add_argument("--retry-base-delay", type=float, default=1.0)
+    pin.add_argument("--sleep-between-pages", type=float, default=0.1)
+    pin.add_argument("--workers", type=int, default=4)
+    pin.add_argument("--n-shards", type=int, default=5)
+    pin.add_argument("--shard-id", type=int, default=0)
+    pin.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=None)
+
+    # -------- nwm --------
+    pnwm = sub.add_parser("nwm", help="NWM land features")
+    nsub = pnwm.add_subparsers(dest="mode", required=True)
+
+    pb = nsub.add_parser("bbox", help="Build daily bbox geoparquet for a year (sharded by day)")
+    pb.add_argument("--year", type=int, required=True)
+    pb.add_argument("--out-root", default=None, help="Output root dir")
+    pb.add_argument("--bbox", nargs=4, type=float, default=list(DEFAULT_WA_BBOX_WGS84), metavar=("MINLON","MINLAT","MAXLON","MAXLAT"))
+    pb.add_argument("--max-retries", type=int, default=3)
+    pb.add_argument("--heartbeat-seconds", type=int, default=30)
+    pb.add_argument("--workers", type=int, default=4)
+    pb.add_argument("--n-shards", type=int, default=5)
+    pb.add_argument("--shard-id", type=int, default=0)
+    pb.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=None)
+
+    pe = nsub.add_parser("enrich", help="Enrich iNat CSVs with NWM features (sharded by row index)")
+    pe.add_argument("--mushroom-dir", default=None, help="Root dir containing taxon subfolders with data.csv")
+    pe.add_argument("--workers", type=int, default=4)
+    pe.add_argument("--n-shards", type=int, default=5)
+    pe.add_argument("--shard-id", type=int, default=0)
+    pe.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=None)
+
+    return p
+
+
+def run_inat(args: argparse.Namespace) -> int:
+    progress_bar = env_flag("PROGRESS_BAR", True) if args.progress_bar is None else args.progress_bar
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR")
     gcs_bucket = args.gcs_bucket or os.getenv("GCS_BUCKET")
-
     output_path = Path(output_dir).expanduser() if output_dir else None
 
-    return CollectorConfig(
-        inat_url=args.inat_url or os.getenv("INAT_URL", "https://api.inaturalist.org/v1/observations"),
+    if not output_path and not gcs_bucket:
+        output_path = Path.cwd() / "mushroom_data"
+
+    collector = MushroomDataCollector(
         inat_api_token=args.inat_token or os.getenv("INAT_API_TOKEN"),
+        inat_url=args.inat_url or os.getenv("INAT_URL", "https://api.inaturalist.org/v1/observations"),
         user_agent=os.getenv("INAT_USER_AGENT", "MushroomCollector/1.0 (contact: you@example.com)"),
         output_dir=output_path,
-        gcs_bucket=gcs_bucket if not output_path else None,
+        bucket_name=gcs_bucket if not output_path else None,
         start_date=args.start_date,
         end_date=args.end_date,
         per_page=args.per_page,
         max_retries=args.max_retries,
         retry_base_delay=args.retry_base_delay,
-        sleep_between_pages=args.sleep_between_pages,
-        parallel_workers=int(os.getenv("PARALLEL_WORKERS", args.workers)),
-        n_shards=int(os.getenv("N_SHARDS", args.n_shards)),
-        shard_id=int(os.getenv("SHARD_ID", args.shard_id)),
         progress_bar=progress_bar,
-    )
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="iNaturalist Mushroom Data Collector")
-    p.add_argument("--output-dir", default=None, help="Local output directory (preferred).")
-    p.add_argument("--gcs-bucket", default=None, help="GCS bucket name (optional).")
-
-    p.add_argument("--inat-url", default=None)
-    p.add_argument("--inat-token", default=None)
-
-    p.add_argument("--start-date", default=None, help="YYYY-MM-DD")
-    p.add_argument("--end-date", default=None, help="YYYY-MM-DD")
-
-    p.add_argument("--per-page", type=int, default=200)
-    p.add_argument("--max-retries", type=int, default=5)
-    p.add_argument("--retry-base-delay", type=float, default=1.0)
-
-    p.add_argument("--sleep-between-pages", type=float, default=0.1)
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--n-shards", type=int, default=5)
-    p.add_argument("--shard-id", type=int, default=0)
-
-    p.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=None)
-
-    return p.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    cfg = build_config_from_env_and_args(args)
-
-    if not cfg.output_dir and not cfg.gcs_bucket:
-        cfg = CollectorConfig(**{**cfg.__dict__, "output_dir": Path.cwd() / "mushroom_data"})
-
-    collector = MushroomDataCollector(
-        inat_api_token=cfg.inat_api_token,
-        inat_url=cfg.inat_url,
-        user_agent=cfg.user_agent,
-        output_dir=cfg.output_dir,
-        bucket_name=cfg.gcs_bucket,
-        start_date=cfg.start_date,
-        end_date=cfg.end_date,
-        per_page=cfg.per_page,
-        max_retries=cfg.max_retries,
-        retry_base_delay=cfg.retry_base_delay,
-        progress_bar=cfg.progress_bar,
     )
 
     try:
         collector.collect_data_for_all_taxa(
             DEFAULT_TAXA,
-            sleep_between_pages=cfg.sleep_between_pages,
-            parallel_workers=cfg.parallel_workers,
-            n_shards=cfg.n_shards,
-            shard_id=cfg.shard_id,
+            sleep_between_pages=args.sleep_between_pages,
+            parallel_workers=int(os.getenv("PARALLEL_WORKERS", args.workers)),
+            n_shards=int(os.getenv("N_SHARDS", args.n_shards)),
+            shard_id=int(os.getenv("SHARD_ID", args.shard_id)),
         )
     finally:
         collector.close()
 
-    logger.info("Done.")
+    logger.info("inat done.")
     return 0
+
+
+def run_nwm_bbox(args: argparse.Namespace) -> int:
+    from .nwm_land import NWMLandFeaturizer
+
+    progress_bar = env_flag("PROGRESS_BAR", True) if args.progress_bar is None else args.progress_bar
+    out_root = Path(args.out_root or os.getenv("NWM_OUT_ROOT") or (Path.cwd() / "nwm_land_out")).expanduser()
+
+    nwm = NWMLandFeaturizer(workers=int(os.getenv("PARALLEL_WORKERS", args.workers)))
+    bbox = tuple(args.bbox)
+    nwm.run_bbox_year(
+        year=args.year,
+        bbox_wgs84=bbox,  # (minlon, minlat, maxlon, maxlat)
+        out_root=out_root,
+        n_shards=int(os.getenv("N_SHARDS", args.n_shards)),
+        shard_id=int(os.getenv("SHARD_ID", args.shard_id)),
+        max_retries=args.max_retries,
+        heartbeat_seconds=args.heartbeat_seconds,
+        progress_bar=progress_bar,
+    )
+    return 0
+
+
+def run_nwm_enrich(args: argparse.Namespace) -> int:
+    from .nwm_land import NWMLandFeaturizer
+
+    progress_bar = env_flag("PROGRESS_BAR", True) if args.progress_bar is None else args.progress_bar
+    mushroom_dir = Path(args.mushroom_dir or os.getenv("MUSHROOM_DIR") or (Path.cwd() / "mushroom_data")).expanduser()
+
+    nwm = NWMLandFeaturizer(workers=int(os.getenv("PARALLEL_WORKERS", args.workers)))
+    nwm.enrich_inat_folder(
+        root_dir=mushroom_dir,
+        n_shards=int(os.getenv("N_SHARDS", args.n_shards)),
+        shard_id=int(os.getenv("SHARD_ID", args.shard_id)),
+        progress_bar=progress_bar,
+    )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = build_parser()
+    args = p.parse_args(argv)
+
+    if args.tool == "inat":
+        return run_inat(args)
+
+    if args.tool == "nwm":
+        if args.mode == "bbox":
+            return run_nwm_bbox(args)
+        if args.mode == "enrich":
+            return run_nwm_enrich(args)
+
+    raise SystemExit("Invalid arguments")

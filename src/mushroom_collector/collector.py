@@ -24,7 +24,7 @@ except Exception:
     gcs_storage = None  # type: ignore
 
 
-def _env_flag(name: str, default: bool) -> bool:
+def env_flag(name: str, default: bool) -> bool:
     v = os.getenv(name, "true" if default else "false").strip().lower()
     return v in ("1", "true", "yes", "y", "on")
 
@@ -146,9 +146,7 @@ class MushroomDataCollector:
         if self.end_date:
             params["d2"] = self.end_date.strftime("%Y-%m-%d")
         if None not in (self.nelat, self.nelng, self.swlat, self.swlng):
-            params.update(
-                {"nelat": self.nelat, "nelng": self.nelng, "swlat": self.swlat, "swlng": self.swlng}
-            )
+            params.update({"nelat": self.nelat, "nelng": self.nelng, "swlat": self.swlat, "swlng": self.swlng})
         if last_id:
             params["id_below"] = last_id
 
